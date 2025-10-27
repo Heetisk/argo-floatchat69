@@ -7,6 +7,8 @@ import streamlit as st
 from rag_pipeline import ask
 import os
 from pathlib import Path
+import tempfile
+import shutil
 
 # Page config
 st.set_page_config(
@@ -45,29 +47,89 @@ with st.sidebar:
     
     st.divider()
     
-    # Data folder info
-    st.subheader("📁 Data Status")
-    data_folder = Path("./data")
-    nc_files = list(data_folder.glob("*.nc")) if data_folder.exists() else []
+    # File uploader
+    st.subheader("📁 Upload Argo Data")
+    uploaded_files = st.file_uploader(
+        "Upload NetCDF files",
+        type="nc",
+        accept_multiple_files=True,
+        help="Upload one or more Argo NetCDF (.nc) files"
+    )
     
-    if nc_files:
-        st.success(f"Found {len(nc_files)} NetCDF file(s)")
-        with st.expander("View Files"):
-            for nc_file in nc_files[:5]:
-                st.text(nc_file.name)
-    else:
-        st.warning("No NetCDF files found in ./data")
-        st.info("Place Argo NetCDF files in the 'data' folder")
+    # Initialize session state for uploaded files
+    if "uploaded_files_path" not in st.session_state:
+        st.session_state.uploaded_files_path = []
+    if "vector_store_ready" not in st.session_state:
+        st.session_state.vector_store_ready = False
+    
+    # Handle file upload
+    if uploaded_files:
+        # Create temporary directory for uploaded files
+        if st.session_state.uploaded_files_path:
+            # Clear previous files
+            for path in st.session_state.uploaded_files_path:
+                if os.path.exists(path):
+                    os.remove(path)
+        
+        st.session_state.uploaded_files_path = []
+        temp_dir = tempfile.mkdtemp()
+        
+        with st.spinner("Saving uploaded files..."):
+            for uploaded_file in uploaded_files:
+                file_path = os.path.join(temp_dir, uploaded_file.name)
+                with open(file_path, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+                st.session_state.uploaded_files_path.append(file_path)
+        
+        st.success(f"✅ {len(uploaded_files)} file(s) uploaded successfully")
+        st.session_state.vector_store_ready = False
+    
+    # Display uploaded files
+    if st.session_state.uploaded_files_path:
+        st.info(f"📎 {len(st.session_state.uploaded_files_path)} file(s) ready for ingestion")
     
     st.divider()
     
     # Ingest button
-    if st.button("🔄 Ingest Data", use_container_width=True):
+    if st.button("🔄 Ingest Data", use_container_width=True, disabled=not st.session_state.uploaded_files_path):
         with st.spinner("Ingesting data into vector database..."):
             try:
-                from ingest import ingest
-                ingest()
-                st.success("Data ingestion complete!")
+                # Import necessary functions
+                from ingest import load_argo_netcdf, create_vector_store
+                
+                # Process uploaded files
+                summaries = []
+                for file_path in st.session_state.uploaded_files_path:
+                    summary, info = load_argo_netcdf(file_path)
+                    summaries.append(summary)
+                
+                # Create vector store from uploaded files
+                if summaries:
+                    from langchain_text_splitters import RecursiveCharacterTextSplitter
+                    from langchain_community.vectorstores import FAISS
+                    from langchain_huggingface import HuggingFaceEmbeddings
+                    
+                    text_splitter = RecursiveCharacterTextSplitter(
+                        chunk_size=500,
+                        chunk_overlap=50,
+                        length_function=len
+                    )
+                    
+                    chunks = []
+                    for summary in summaries:
+                        chunks.extend(text_splitter.split_text(summary))
+                    
+                    embeddings = HuggingFaceEmbeddings(
+                        model_name="sentence-transformers/all-MiniLM-L6-v2"
+                    )
+                    
+                    vector_store = FAISS.from_texts(chunks, embedding=embeddings)
+                    vector_store.save_local("./vector_store")
+                    
+                    st.session_state.vector_store_ready = True
+                    st.success(f"Data ingestion complete! Processed {len(summaries)} profile(s)")
+                else:
+                    st.error("No data to process")
             except Exception as e:
                 st.error(f"Error: {str(e)}")
 

@@ -32,15 +32,20 @@ def get_llm():
 
 # ----------------------------------------------------------------------
 def data_folder_has_files():
+    """Check if data folder has NetCDF files (for backward compatibility)."""
     data_path = Path(DATA_FOLDER)
-    return any(data_path.glob("*.nc"))
+    return data_path.exists() and any(data_path.glob("*.nc"))
+
+def vector_store_exists():
+    """Check if vector store exists and is ready."""
+    return os.path.exists(VECTOR_DB_PATH) and any(Path(VECTOR_DB_PATH).iterdir())
 
 # ----------------------------------------------------------------------
 # Load or create vector store
 # ----------------------------------------------------------------------
 def get_vector_store():
     """Get or create the FAISS vector store."""
-    if os.path.exists(VECTOR_DB_PATH) and any(Path(VECTOR_DB_PATH).iterdir()):
+    if vector_store_exists():
         try:
             embeddings = HuggingFaceEmbeddings(
                 model_name="sentence-transformers/all-MiniLM-L6-v2"
@@ -59,12 +64,12 @@ def ask(question: str) -> str:
     """
     Ask a question about Argo data using RAG.
     """
-    if data_folder_has_files():
-        # Try to use vector search
-        vector_store = get_vector_store()
-        
-        if vector_store:
-            # Use FAISS vector store to retrieve relevant docs
+    # Check if vector store exists (from either uploaded files or data folder)
+    vector_store = get_vector_store()
+    
+    if vector_store:
+        # Use FAISS vector store to retrieve relevant docs
+        try:
             docs = vector_store.similarity_search(question, k=3)
             context = "\n".join(doc.page_content for doc in docs)
             
@@ -78,22 +83,23 @@ Question: {question}
 
 Provide a clear, informative answer based on the context provided."""
             
-            try:
-                answer = get_llm().predict(prompt)
-                return answer
-            except Exception as e:
-                return f"I encountered an error: {str(e)}"
-        else:
-            # Fallback if vector store doesn't exist
-            prompt = f"""You are a helpful AI assistant specialized in oceanographic data analysis.
+            answer = get_llm().predict(prompt)
+            return answer
+        except Exception as e:
+            return f"I encountered an error: {str(e)}"
+    else:
+        # No vector store available
+        if not data_folder_has_files():
+            return "⚠️ No Argo data loaded. Please upload NetCDF files using the sidebar and click 'Ingest Data' to process them."
+        
+        # Fallback if vector store doesn't exist but data folder has files
+        prompt = f"""You are a helpful AI assistant specialized in oceanographic data analysis.
 Answer this question about oceanographic data:
 
 Question: {question}
 
 Please provide a general informative answer about oceanographic data and Argo floats."""
-            try:
-                return get_llm().predict(prompt)
-            except Exception as e:
-                return f"I encountered an error: {str(e)}"
-    else:
-        return "No Argo NetCDF data files found in the data folder. Please add some data files first."
+        try:
+            return get_llm().predict(prompt)
+        except Exception as e:
+            return f"I encountered an error: {str(e)}"
