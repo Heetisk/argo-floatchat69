@@ -9,6 +9,10 @@ import os
 from pathlib import Path
 import tempfile
 import shutil
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Page config
 st.set_page_config(
@@ -34,16 +38,35 @@ with Gemini LLM to answer your questions about oceanographic observations.
 with st.sidebar:
     st.header("⚙️ Configuration")
     
-    # API Key input
-    api_key = st.text_input(
-        "Gemini API Key",
-        type="password",
-        value=os.getenv("GEMINI_API_KEY", ""),
-        help="Enter your Google Gemini API key"
-    )
+    # API Key configuration
+    # Initialize session state for manual API key
+    if "manual_api_key" not in st.session_state:
+        st.session_state.manual_api_key = ""
     
-    if api_key:
-        os.environ["GEMINI_API_KEY"] = api_key
+    # Check environment variable first
+    env_api_key = os.getenv("GEMINI_API_KEY", "")
+    
+    # If we have a manual API key in session state, set it in environment
+    if st.session_state.manual_api_key and not env_api_key:
+        os.environ["GEMINI_API_KEY"] = st.session_state.manual_api_key
+        env_api_key = st.session_state.manual_api_key
+    
+    if env_api_key:
+        st.success("✅ Gemini API Key configured")
+    else:
+        st.warning("⚠️ No API key in environment")
+        manual_api_key = st.text_input(
+            "Enter your Gemini API Key",
+            type="password",
+            help="Enter your Google Gemini API key to use the app",
+            key="manual_api_key_input"
+        )
+        
+        # Update session state when user enters a new API key
+        if manual_api_key:
+            st.session_state.manual_api_key = manual_api_key
+            os.environ["GEMINI_API_KEY"] = manual_api_key
+            st.success("✅ API key configured")
     
     st.divider()
     
@@ -163,7 +186,7 @@ if prompt := st.chat_input("Ask a question about Argo data..."):
                 st.session_state.messages.append({"role": "assistant", "content": response})
             except ValueError as e:
                 if "API key" in str(e):
-                    error_msg = "❌ API key not set. Please enter your Gemini API key in the sidebar."
+                    error_msg = "❌ API key not set. Please enter your Gemini API key in the sidebar or configure GEMINI_API_KEY in your environment variables."
                 else:
                     error_msg = f"❌ Configuration error: {str(e)}"
                 st.error(error_msg)
