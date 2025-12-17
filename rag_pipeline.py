@@ -19,15 +19,28 @@ DATA_FOLDER = "./data"
 # LLM – use the Gemini wrapper (lazy initialization)
 # ----------------------------------------------------------------------
 llm = None
+_current_api_key = None
+_current_model = None
 
 def get_llm():
-    """Get or create the Gemini LLM instance."""
-    global llm
-    if llm is None:
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY environment variable not set")
-        llm = GeminiChatLLM(api_key=api_key, temperature=0.1)
+    """Get or create the Gemini LLM instance, refreshing if API key or Model changes."""
+    global llm, _current_api_key, _current_model
+    
+    new_api_key = os.getenv("GEMINI_API_KEY")
+    new_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    
+    if not new_api_key:
+        raise ValueError("GEMINI_API_KEY environment variable not set")
+        
+    # Re-initialize if key/model changed or LLM not created yet
+    if (llm is None or 
+        new_api_key != _current_api_key or 
+        new_model != _current_model):
+        
+        llm = GeminiChatLLM(api_key=new_api_key, model_name=new_model, temperature=0.1)
+        _current_api_key = new_api_key
+        _current_model = new_model
+        
     return llm
 
 # ----------------------------------------------------------------------
@@ -67,13 +80,13 @@ def ask(question: str) -> str:
     # Check if vector store exists (from either uploaded files or data folder)
     vector_store = get_vector_store()
     
+
     if vector_store:
         # Use FAISS vector store to retrieve relevant docs
-        try:
-            docs = vector_store.similarity_search(question, k=3)
-            context = "\n".join(doc.page_content for doc in docs)
-            
-            prompt = f"""You are a helpful AI assistant specialized in oceanographic data analysis.
+        docs = vector_store.similarity_search(question, k=3)
+        context = "\n".join(doc.page_content for doc in docs)
+        
+        prompt = f"""You are a helpful AI assistant specialized in oceanographic data analysis.
 Use the following context from Argo float data to answer the user's question.
 
 Context:
@@ -82,11 +95,9 @@ Context:
 Question: {question}
 
 Provide a clear, informative answer based on the context provided."""
-            
-            answer = get_llm().predict(prompt)
-            return answer
-        except Exception as e:
-            return f"I encountered an error: {str(e)}"
+        
+        answer = get_llm().predict(prompt)
+        return answer
     else:
         # No vector store available
         if not data_folder_has_files():
@@ -99,7 +110,4 @@ Answer this question about oceanographic data:
 Question: {question}
 
 Please provide a general informative answer about oceanographic data and Argo floats."""
-        try:
-            return get_llm().predict(prompt)
-        except Exception as e:
-            return f"I encountered an error: {str(e)}"
+        return get_llm().predict(prompt)

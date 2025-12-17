@@ -27,7 +27,7 @@ class GeminiChatLLM:
     def __init__(
         self,
         api_key: str | None = None,
-        model_name: str = "gemini-2.0-flash",
+        model_name: str | None = None,
         temperature: float = 0.1,
     ):
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
@@ -35,7 +35,8 @@ class GeminiChatLLM:
             raise ValueError(
                 "Gemini API key missing – set GEMINI_API_KEY env var"
             )
-        self.model_name = model_name
+        # Prioritize passed arg, then env var, then default
+        self.model_name = model_name or os.getenv("GEMINI_MODEL") or "gemini-2.0-flash"
         self.temperature = temperature
 
         # Endpoint (no trailing slash!)
@@ -57,7 +58,13 @@ class GeminiChatLLM:
         }
 
         resp = requests.post(self.endpoint, headers=headers, json=payload)
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            # Include the response text in the error message for debugging
+            raise requests.exceptions.HTTPError(
+                f"{e} - Response: {resp.text}", response=resp
+            ) from e
         return resp.json()
 
     def predict(self, prompt: str) -> str:

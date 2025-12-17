@@ -9,12 +9,6 @@ import os
 from pathlib import Path
 import tempfile
 import shutil
-import pandas as pd
-from dotenv import load_dotenv
-from visualizations import should_show_map, should_show_graphs, extract_locations_from_uploaded, extract_locations_from_data, extract_profile_data, create_depth_profile_chart
-
-# Load environment variables from .env file
-load_dotenv()
 
 # Page config
 st.set_page_config(
@@ -40,36 +34,83 @@ with Gemini LLM to answer your questions about oceanographic observations.
 with st.sidebar:
     st.header("⚙️ Configuration")
     
-    # API Key configuration
-    # Initialize session state for manual API key
-    if "manual_api_key" not in st.session_state:
-        st.session_state.manual_api_key = ""
+    # API Key Handling
+    from dotenv import load_dotenv, dotenv_values
     
-    # Check environment variable first
-    env_api_key = os.getenv("GEMINI_API_KEY", "")
+    # Check .env file directly to avoid process pollution from previous runs
+    env_config = dotenv_values(".env")
+    file_system_key = env_config.get("GEMINI_API_KEY", "")
     
-    # If we have a manual API key in session state, set it in environment
-    if st.session_state.manual_api_key and not env_api_key:
-        os.environ["GEMINI_API_KEY"] = st.session_state.manual_api_key
-        env_api_key = st.session_state.manual_api_key
+    # Also check actual environment (in case set via terminal)
+    # But be careful: this might be polluted by our own previous runs in Streamlit
+    env_system_key = os.getenv("GEMINI_API_KEY", "")
     
-    if env_api_key:
-        st.success("✅ Gemini API Key configured")
-    else:
-        st.warning("⚠️ No API key in environment")
-        manual_api_key = st.text_input(
-            "Enter your Gemini API Key",
+    # Trust the file first, or the env var if it looks legitimate (not empty)
+    # We treat it as "System Key Active" only if we find a non-empty key
+    has_system_key = bool(file_system_key and file_system_key.strip())
+    
+    # If not in file, check env, but valid persistence is hard to distinguish from stale state.
+    # For this use case, we rely on the .env file as the truth for "System Key".
+    
+    system_api_key = file_system_key if has_system_key else ""
+    user_api_key = ""
+    
+    if has_system_key:
+        st.success("✅ System API Key Active")
+        user_api_key = st.text_input(
+            "Custom API Key (Optional)",
             type="password",
-            help="Enter your Google Gemini API key to use the app",
-            key="manual_api_key_input"
+            help="Enter your own key to override the system key"
         )
-        
-        # Update session state when user enters a new API key
-        if manual_api_key:
-            st.session_state.manual_api_key = manual_api_key
-            os.environ["GEMINI_API_KEY"] = manual_api_key
-            st.success("✅ API key configured")
+    else:
+        st.warning("⚠️ No System API Key found")
+        user_api_key = st.text_input(
+            "Gemini API Key (Required)",
+            type="password",
+            help="Enter your Google Gemini API key"
+        )
     
+    # Use user key if provided, otherwise system key
+    final_api_key = user_api_key if user_api_key else system_api_key
+    
+    if final_api_key:
+        os.environ["GEMINI_API_KEY"] = final_api_key
+    elif "GEMINI_API_KEY" in os.environ:
+        # Clear environment variable if no key is available to prevent stale state
+        del os.environ["GEMINI_API_KEY"]
+    
+    # Model Selection
+    # Verified models associated with API key
+    model_options = [
+        "gemini-2.0-flash", # Default
+        "gemini-2.5-flash",
+        "gemini-2.5-pro", 
+        "gemini-2.0-flash-exp",
+        "gemini-2.0-flash-001",
+        "gemini-2.0-flash-lite-preview-02-05",
+        "gemini-exp-1206",
+        "gemma-3-27b-it",
+        "gemma-3-12b-it",
+        "gemini-flash-latest",
+        "gemini-pro-latest"
+    ]
+    current_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    if current_model not in model_options:
+        model_options.insert(0, current_model)
+        
+    selected_model = st.selectbox(
+        "Select Model",
+        options=model_options,
+        index=model_options.index(current_model),
+        help="Switch models if you encounter rate limits (Quota Exceeded)"
+    )
+    
+    if selected_model != current_model:
+        os.environ["GEMINI_MODEL"] = selected_model
+        # Force reload of LLM in pipeline by clearing session state if needed, 
+        # but rag_pipeline checks env var so we just need to ensure next call uses it.
+        st.rerun()
+
     st.divider()
     
     # File uploader
@@ -86,12 +127,6 @@ with st.sidebar:
         st.session_state.uploaded_files_path = []
     if "vector_store_ready" not in st.session_state:
         st.session_state.vector_store_ready = False
-    if "locations" not in st.session_state:
-        st.session_state.locations = []
-    if "profile_data" not in st.session_state:
-        st.session_state.profile_data = []
-    if "show_visualization" not in st.session_state:
-        st.session_state.show_visualization = False
     
     # Handle file upload
     if uploaded_files:
@@ -119,12 +154,6 @@ with st.sidebar:
     if st.session_state.uploaded_files_path:
         st.info(f"📎 {len(st.session_state.uploaded_files_path)} file(s) ready for ingestion")
     
-    # Load locations from data folder if available
-    if not st.session_state.locations and os.path.exists("./data"):
-        st.session_state.locations = extract_locations_from_data("./data")
-        if st.session_state.locations:
-            st.info(f"📊 Found {len(st.session_state.locations)} location(s) from data folder")
-    
     st.divider()
     
     # Ingest button
@@ -145,16 +174,6 @@ with st.sidebar:
                     from langchain_text_splitters import RecursiveCharacterTextSplitter
                     from langchain_community.vectorstores import FAISS
                     from langchain_huggingface import HuggingFaceEmbeddings
-                    
-                    # Extract location data
-                    st.session_state.locations = extract_locations_from_uploaded(st.session_state.uploaded_files_path)
-                    
-                    # Extract profile data for visualizations
-                    st.session_state.profile_data = []
-                    for file_path in st.session_state.uploaded_files_path:
-                        profile = extract_profile_data(file_path)
-                        if profile is not None:
-                            st.session_state.profile_data.append(profile)
                     
                     text_splitter = RecursiveCharacterTextSplitter(
                         chunk_size=500,
@@ -186,8 +205,6 @@ st.header("💬 Chat with Argo Data")
 # Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "last_prompt" not in st.session_state:
-    st.session_state.last_prompt = ""
 
 # Display chat messages
 for message in st.session_state.messages:
@@ -196,7 +213,6 @@ for message in st.session_state.messages:
 
 # User input
 if prompt := st.chat_input("Ask a question about Argo data..."):
-    st.session_state.last_prompt = prompt
     # Add user message to chat history
     st.session_state.messages.append({"role": "user", "content": prompt})
     
@@ -213,59 +229,34 @@ if prompt := st.chat_input("Ask a question about Argo data..."):
                 st.session_state.messages.append({"role": "assistant", "content": response})
             except ValueError as e:
                 if "API key" in str(e):
-                    error_msg = "❌ API key not set. Please enter your Gemini API key in the sidebar or configure GEMINI_API_KEY in your environment variables."
+                    error_msg = "❌ API key not set. Please enter your Gemini API key in the sidebar."
                 else:
                     error_msg = f"❌ Configuration error: {str(e)}"
                 st.error(error_msg)
                 st.session_state.messages.append({"role": "assistant", "content": error_msg})
             except Exception as e:
-                error_msg = f"❌ Error: {str(e)}. Please check your configuration and try again."
+                error_str = str(e)
+                # Check for 429 or specific quota messages
+                if "429" in error_str or "Too Many Requests" in error_str or "quota" in error_str.lower():
+                    error_msg = (
+                        "⚠️ **API Limit Reached**\n\n"
+                        "The specific model you are using has hit its free quota.\n\n"
+                        "**Try switching to a different model in the sidebar.**\n\n"
+                        "Or create your own API key at https://aistudio.google.com/ and enter it above."
+                    )
+                elif "API key not valid" in error_str or "API_KEY_INVALID" in error_str:
+                    # Distinguish between System and Custom key error
+                    key_source = "Custom" if user_api_key else "System"
+                    error_msg = (
+                        f"❌ **Invalid {key_source} API Key**\n\n"
+                        f"The provided {key_source} API Key is not working properly.\n"
+                        "Please check that you copied the key correctly from Google AI Studio."
+                    )
+                else:
+                    error_msg = f"❌ Error: {error_str}. Please check your configuration and try again."
+                
                 st.error(error_msg)
                 st.session_state.messages.append({"role": "assistant", "content": error_msg})
-
-""" Visualization section with safe session state access and modal tabs """
-locations = st.session_state.get("locations", [])
-last_prompt = st.session_state.get("last_prompt", "")
-show_visualization = st.session_state.get("show_visualization", False)
-
-if locations:
-    show_map_auto = should_show_map(last_prompt)
-    show_graphs_auto = should_show_graphs(last_prompt)
-
-    # Open the visualization modal automatically after ingest, or when relevant question asked
-    if show_map_auto or show_graphs_auto or show_visualization:
-        st.divider()
-        st.header("📊 Visualizations")
-
-        # Tabs: Map and Graphs
-        tab1, tab2 = st.tabs(["Map", "Graphs"])
-
-        with tab1:
-            df_locations = pd.DataFrame(locations)
-            if not df_locations.empty:
-                st.map(df_locations[["latitude", "longitude"]], zoom=2)
-                with st.expander("📍 Location Details", expanded=False):
-                    for idx, loc in enumerate(locations):
-                        st.write(f"**Profile {idx + 1}:**")
-                        st.write(f"- Platform: {loc['platform']}")
-                        st.write(f"- Location: {loc['latitude']:.4f}°, {loc['longitude']:.4f}°")
-                        st.write(f"- Date: {loc['date']}")
-                        st.write(f"- File: {loc['file']}")
-                        st.divider()
-
-        with tab2:
-            if show_graphs_auto:
-                profiles = st.session_state.get("profile_data", [])
-                if profiles:
-                    fig = create_depth_profile_chart(profiles)
-                    if fig is not None:
-                        st.plotly_chart(fig, use_container_width=True)
-                    else:
-                        st.info("No sufficient profile data to plot.")
-                else:
-                    st.info("No profile data available.")
-            else:
-                st.info("Graphs appear when your question asks about depth, comparisons, or ratios.")
 
 # Footer
 st.divider()
