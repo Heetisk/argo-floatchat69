@@ -27,7 +27,7 @@ def get_llm():
     global llm, _current_api_key, _current_model
     
     new_api_key = os.getenv("GEMINI_API_KEY")
-    new_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    new_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     
     if not new_api_key:
         raise ValueError("GEMINI_API_KEY environment variable not set")

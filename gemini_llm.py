@@ -36,7 +36,7 @@ class GeminiChatLLM:
                 "Gemini API key missing – set GEMINI_API_KEY env var"
             )
         # Prioritize passed arg, then env var, then default
-        self.model_name = model_name or os.getenv("GEMINI_MODEL") or "gemini-2.0-flash"
+        self.model_name = model_name or os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"
         self.temperature = temperature
 
         # Endpoint (no trailing slash!)

@@ -82,8 +82,8 @@ with st.sidebar:
     # Model Selection
     # Verified models associated with API key
     model_options = [
-        "gemini-2.0-flash", # Default
-        "gemini-2.5-flash",
+        "gemini-2.5-flash", # Default
+        "gemini-2.0-flash", 
         "gemini-2.5-pro", 
         "gemini-2.0-flash-exp",
         "gemini-2.0-flash-001",
@@ -94,7 +94,7 @@ with st.sidebar:
         "gemini-flash-latest",
         "gemini-pro-latest"
     ]
-    current_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    current_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     if current_model not in model_options:
         model_options.insert(0, current_model)
         
