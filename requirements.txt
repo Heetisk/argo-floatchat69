@@ -15,10 +15,12 @@ streamlit-chat>=0.1.0
 
 # Data processing
 pandas>=2.0.0
-xarray>=2024.0.0
 numpy>=2.3.0
-netcdf4>=1.7.0
 scipy>=1.11.0
+
+# Safe xarray backend (no HDF5 build)
+xarray
+h5netcdf
 
 # HTTP requests
 requests>=2.32.0
